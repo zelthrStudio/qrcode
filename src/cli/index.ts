@@ -5,13 +5,15 @@ import process from 'node:process'
 import readline from 'node:readline/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type QRCodeData, generate, toDataURL, toPNG, toSVG } from '../generate'
+import { type QRCodeData, decodePNG, generate, toDataURL, toPNG, toSVG } from '../generate'
+import type { ImageDataLike } from '../scan'
 import { promptPay } from '../promptpay'
 
 interface CliOptions {
   text?: string
-  format: 'svg' | 'png' | 'data-url' | 'terminal'
+  format: 'svg' | 'png' | 'data-url'
   output?: string
+  logo?: string
   scale?: number
   border?: number
   ecc?: 'L' | 'M' | 'Q' | 'H'
@@ -41,8 +43,9 @@ PromptPay:
       --max-amount <baht>   Max amount (for non-fixed amount requests)
 
 Output:
-  -f, --format <fmt>        svg | png | data-url | terminal (default: terminal)
+  -f, --format <fmt>        svg | png | data-url (default: svg)
   -o, --output <file>       Write to a file instead of stdout
+      --logo <file>         Embed a PNG image in the center of the QR Code
 
 Options:
   -s, --scale <n>           Modules per pixel (default: 4)
@@ -60,12 +63,13 @@ Options:
 Examples:
   qrcode "https://example.com"
   qrcode "hello" -f svg -o qr.svg
+  qrcode "hello" --logo logo.png -f png -o qr.png
   qrcode -p 0812345678 --amount 150 -f png -o qr.png
-  cat payload.txt | qrcode -f terminal`
+  cat payload.txt | qrcode -f svg -o qr.svg`
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
-    format: 'terminal',
+    format: 'svg',
     boostEcc: true,
     quiet: false,
     help: false,
@@ -94,8 +98,8 @@ function parseArgs(argv: string[]): CliOptions {
       case '-f':
       case '--format': {
         const v = value(arg, i)
-        if (!v || !['svg', 'png', 'data-url', 'terminal'].includes(v))
-          throw new Error(`Invalid format: ${v} (expected svg, png, data-url or terminal)`)
+        if (!v || !['svg', 'png', 'data-url'].includes(v))
+          throw new Error(`Invalid format: ${v} (expected svg, png or data-url)`)
         options.format = v as CliOptions['format']
         if (!arg.includes('='))
           i++
@@ -104,6 +108,12 @@ function parseArgs(argv: string[]): CliOptions {
       case '-o':
       case '--output': {
         options.output = value(arg, i)
+        if (!arg.includes('='))
+          i++
+        break
+      }
+      case '--logo': {
+        options.logo = value(arg, i)
         if (!arg.includes('='))
           i++
         break
@@ -228,37 +238,19 @@ async function prompt(options: CliOptions): Promise<void> {
     else {
       options.text = await rl.question('Text to encode: ')
     }
-    const format = (await rl.question('Format svg / png / data-url / terminal  [terminal]: ')).trim().toLowerCase()
-    if (['svg', 'png', 'data-url', 'terminal'].includes(format))
+    const format = (await rl.question('Format svg / png / data-url  [svg]: ')).trim().toLowerCase()
+    if (['svg', 'png', 'data-url'].includes(format))
       options.format = format as CliOptions['format']
-    if (options.format !== 'terminal') {
-      const output = (await rl.question('Output file (Enter to print): ')).trim()
-      if (output)
-        options.output = output
-    }
+    const output = (await rl.question('Output file (Enter to print): ')).trim()
+    if (output)
+      options.output = output
+    const logo = (await rl.question('Logo PNG file (Enter to skip): ')).trim()
+    if (logo)
+      options.logo = logo
   }
   finally {
     rl.close()
   }
-}
-
-function renderTerminal(qr: QRCodeData, border: number): string {
-  const size = qr.size + border * 2
-  const block = (top: boolean, bottom: boolean) => (top ? (bottom ? '█' : '▀') : (bottom ? '▄' : ' '))
-  const rows: string[] = [' '.repeat(size)]
-  for (let y = 0; y < qr.size; y += 2) {
-    let line = ''
-    for (let x = -border; x < qr.size + border; x++) {
-      const topDark = x >= 0 && y >= 0 && x < qr.size && y < qr.size && qr.matrix[y * qr.size + x] === 1
-      const bottomDark = x >= 0 && y + 1 >= 0 && x < qr.size && y + 1 < qr.size && qr.matrix[(y + 1) * qr.size + x] === 1
-      line += block(topDark, bottomDark)
-    }
-    rows.push(line)
-  }
-  if (qr.size % 2 === 1)
-    rows.push(' '.repeat(size))
-  rows.push(' '.repeat(size))
-  return rows.join('\n')
 }
 
 async function main(): Promise<void> {
@@ -308,9 +300,10 @@ async function main(): Promise<void> {
     ...(boostEcc ? {} : { boostEcc: false }),
     ...(eci !== undefined ? { eci } : {}),
   })
-  const renderOptions = {
+  const renderOptions: { scale?: number; border?: number; logo?: ImageDataLike } = {
     ...(scale !== undefined ? { scale } : {}),
     ...(border !== undefined ? { border } : {}),
+    ...(options.logo ? { logo: decodePNG(await fs.readFile(options.logo)) } : {}),
   }
 
   const stdoutIsTTY = Boolean(process.stdout.isTTY)
@@ -330,7 +323,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function render(qr: QRCodeData, options: CliOptions, renderOptions: { scale?: number; border?: number }): Promise<string | Uint8Array> {
+async function render(qr: QRCodeData, options: CliOptions, renderOptions: { scale?: number; border?: number; logo?: ImageDataLike }): Promise<string | Uint8Array> {
   switch (options.format) {
     case 'svg':
       return toSVG(qr, renderOptions)
@@ -338,8 +331,6 @@ async function render(qr: QRCodeData, options: CliOptions, renderOptions: { scal
       return toPNG(qr, renderOptions)
     case 'data-url':
       return toDataURL(qr, renderOptions)
-    case 'terminal':
-      return renderTerminal(qr, renderOptions.border ?? 4)
   }
 }
 

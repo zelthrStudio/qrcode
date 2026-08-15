@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -170,6 +171,72 @@ describe('renderers', () => {
     expect(url.startsWith('data:image/png;base64,')).toBe(true)
     const png = decodePNG(Uint8Array.from(atob(url.split(',')[1]), c => c.charCodeAt(0)))
     expect(png.width).toBe((qr.size + 8) * 4)
+  })
+})
+
+describe('generate format shortcuts', () => {
+  it('generate(text, "png") returns PNG bytes', () => {
+    const png = generate('https://example.com', 'png')
+    expect(png).toBeInstanceOf(Uint8Array)
+    expect(png[0]).toBe(0x89)
+    expect(png[1]).toBe(0x50)
+  })
+
+  it('generate(text, "svg") returns an SVG string', () => {
+    const svg = generate('https://example.com', 'svg')
+    expect(svg.startsWith('<svg')).toBe(true)
+  })
+
+  it('generate(text, "data-url") returns a data URL', () => {
+    const url = generate('https://example.com', 'data-url')
+    expect(url.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('matches the equivalent render function output', () => {
+    const png1 = generate('match', 'png', { scale: 2 })
+    const png2 = toPNG(generate('match'), { scale: 2 })
+    expect(png1).toEqual(png2)
+  })
+})
+
+describe('center logo', () => {
+  const logoBytes = readFileSync(resolve(__filename, '../fixtures/logo.png'))
+
+  it('decodePNG handles RGBA PNGs with real filters and zlib compression', () => {
+    const logo = decodePNG(logoBytes)
+    expect(logo.width).toBe(16)
+    expect(logo.height).toBe(16)
+    expect(logo.data[0]).toBe(255)
+    expect(logo.data[1]).toBe(0)
+    expect(logo.data[2]).toBe(0)
+    expect(logo.data[3]).toBe(255)
+  })
+
+  it('embeds the logo in the toImageData center', () => {
+    const qr = generate('logo test', { ecc: 'H' })
+    const { data, width } = toImageData(qr, { scale: 4, logo: logoBytes })
+    const center = (Math.floor(width / 2) * width + Math.floor(width / 2)) * 4
+    expect(data[center]).toBe(255)
+    expect(data[center + 1]).toBe(0)
+    expect(data[center + 2]).toBe(0)
+  })
+
+  it('toSVG embeds the logo as an image', () => {
+    const qr = generate('logo svg')
+    const svg = toSVG(qr, { logo: logoBytes })
+    expect(svg).toContain('<image')
+    expect(svg).toContain('data:image/png;base64,')
+  })
+
+  it('PNG with logo still scans to the payload', async () => {
+    const { result } = await renderAndScan('logo round trip', { ecc: 'H' }, { logo: logoBytes, scale: 8 })
+    expect(result.text).toBe('logo round trip')
+  })
+
+  it('accepts raw logo pixels too', () => {
+    const pixels = decodePNG(logoBytes)
+    const png = toPNG(generate('pixel logo'), { logo: pixels })
+    expect(png[0]).toBe(0x89)
   })
 })
 
