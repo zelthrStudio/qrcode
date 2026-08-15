@@ -5,7 +5,7 @@ import { transform } from 'esbuild'
 export default defineBuildConfig({
   entries: [
     'src/index',
-    'src/wasm',
+    'src/scan/wasm',
   ],
   declaration: true,
   clean: true,

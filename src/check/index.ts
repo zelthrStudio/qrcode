@@ -1,8 +1,8 @@
-import type { GenerateOptions, QRCodeData, RenderOptions } from './generate'
-import { generate, generateBinary, generateKanji, toCanvas, toPNG } from './generate'
-import { QrSegment } from './qrcodegen'
-import type { ImageDataLike, ImageSource } from './scan'
-import { scan } from './scan'
+import type { GenerateOptions, QRCodeData, RenderOptions } from '../generate'
+import { generate, generateBinary, generateKanji, toCanvas, toPNG } from '../generate'
+import { QrSegment } from '../generate/qrcodegen'
+import type { ImageDataLike, ImageSource } from '../scan'
+import { scan } from '../scan'
 
 /** Cap on PNG dimensions accepted by `decodePNG` (16k x 16k RGBA = 1 GiB). */
 export const MAX_PNG_DIM = 16384

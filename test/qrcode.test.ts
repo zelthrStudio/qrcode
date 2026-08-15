@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import sharp from 'sharp'
 import { check, checkBinary, checkPromptPay, crc32, decodePNG, generate, generateBinary, generatePromptPay, promptPay, scan, toDataURL, toImageData, toPNG, toSVG, verify, verifyGenerated } from '../src'
-import { Ecc, Mode, QrCode, QrSegment } from '../src/qrcodegen'
+import { Ecc, Mode, QrCode, QrSegment } from '../src/generate/qrcodegen'
 
 const __filename = fileURLToPath(import.meta.url)
 const ECC_BY_LETTER = { L: Ecc.LOW, M: Ecc.MEDIUM, Q: Ecc.QUARTILE, H: Ecc.HIGH } as const

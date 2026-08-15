@@ -7,8 +7,8 @@
  * https://github.com/dtinth/promptpay-qr
  */
 
-import type { GenerateOptions, QRCodeData } from './generate'
-import { generate } from './generate'
+import type { GenerateOptions, QRCodeData } from '../generate'
+import { generate } from '../generate'
 
 export type PromptPayType = 'mobile' | 'nationalId' | 'ewalletId'
 
