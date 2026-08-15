@@ -6,12 +6,12 @@
   "description": "QR Code scanner and generator for JavaScript - scan with OpenCV WASM + WeChat model, generate all QR formats (version 1-40, all ECC levels, all modes)",
   "author": "zelthr",
   "license": "MIT",
-  "homepage": "https://github.com/zelthr/qrcode#readme",
+  "homepage": "https://github.com/zelthrStudio/qrcode#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zelthr/qrcode.git"
+    "url": "git+https://github.com/zelthrStudio/qrcode.git"
   },
-  "bugs": "https://github.com/zelthr/qrcode/issues",
+  "bugs": "https://github.com/zelthrStudio/qrcode/issues",
   "keywords": [
     "qrcode",
     "qr-code",
