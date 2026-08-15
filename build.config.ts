@@ -6,11 +6,12 @@ export default defineBuildConfig({
   entries: [
     'src/index',
     'src/scan/wasm',
+    'src/cli',
   ],
   declaration: true,
   clean: true,
   rollup: {
-    emitCJS: false,
+    emitCJS: true,
     cjsBridge: false,
   },
   hooks: {

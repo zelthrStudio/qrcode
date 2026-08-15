@@ -26,10 +26,11 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs"
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
     }
   },
-  "main": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "typesVersions": {
@@ -39,6 +40,9 @@
         "./dist/index.d.ts"
       ]
     }
+  },
+  "bin": {
+    "qrcode": "./dist/cli.mjs"
   },
   "files": [
     "dist"
