@@ -458,3 +458,58 @@ describe('second-pass fixes', () => {
     expect(() => toImageData(qr, { scale: 300 })).toThrow(/limit/)
   })
 })
+
+describe('third-pass fixes (report-3)', () => {
+  it('toPNG/toSVG/toImageData reject scale < 1 and negative border', () => {
+    const qr = generate('scale-zero')
+    expect(() => toPNG(qr, { scale: 0 })).toThrow(/Invalid scale/)
+    expect(() => toSVG(qr, { scale: 0 })).toThrow(/Invalid scale/)
+    expect(() => toImageData(qr, { scale: 0 })).toThrow(/Invalid scale/)
+    expect(() => toPNG(qr, { scale: 0.5 })).toThrow(/Invalid scale/)
+    expect(() => toPNG(qr, { border: -1 })).toThrow(/Invalid border/)
+    expect(() => toSVG(qr, { border: -1 })).toThrow(/Invalid border/)
+    expect(() => toPNG(qr, { scale: 1, border: 0 })).not.toThrow()
+    expect(() => toSVG(qr, { scale: 4, border: 4 })).not.toThrow()
+  })
+
+  it('generate() format shortcut rejects scale 0', () => {
+    expect(() => generate('x', 'png', { scale: 0 })).toThrow(/Invalid scale/)
+  })
+
+  it('decodePNG rejects an out-of-range deflate back-reference', () => {
+    const crcOf = (type: string, data: Uint8Array) => {
+      const buf = new Uint8Array(4 + data.length)
+      for (let i = 0; i < 4; i++)
+        buf[i] = type.charCodeAt(i)
+      buf.set(data, 4)
+      return crc32(buf)
+    }
+    const chunk = (type: string, data: Uint8Array) => {
+      const out = new Uint8Array(12 + data.length)
+      new DataView(out.buffer).setUint32(0, data.length, false)
+      for (let i = 0; i < 4; i++)
+        out[4 + i] = type.charCodeAt(i)
+      out.set(data, 8)
+      new DataView(out.buffer).setUint32(8 + data.length, crcOf(type, data), false)
+      return out
+    }
+    const ihdr = new Uint8Array(13)
+    const view = new DataView(ihdr.buffer)
+    view.setUint32(0, 1, false)
+    view.setUint32(4, 1, false)
+    ihdr[8] = 8
+    ihdr[9] = 2
+    // fixed-Huffman block: length symbol 257, dist symbol 29 (distance 24577 > out.length 0)
+    const idat = Uint8Array.from([0x78, 0x9C, 0x03, 0x5E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01])
+    const sig = Uint8Array.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    const parts = [chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', new Uint8Array(0))]
+    const png = new Uint8Array(sig.length + parts.reduce((n, c) => n + c.length, 0))
+    png.set(sig)
+    let offset = sig.length
+    for (const part of parts) {
+      png.set(part, offset)
+      offset += part.length
+    }
+    expect(() => decodePNG(png)).toThrow(/back-reference distance/)
+  })
+})

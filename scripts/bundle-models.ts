@@ -4,6 +4,9 @@ import fg from 'fast-glob'
 
 const files = await fg('src/models/*.*')
 
+if (files.length === 0)
+  throw new Error('No model files found in src/models/ (models not pulled? run scripts/download-models.ts first)')
+
 const result = await Promise.all(files.map(async (path) => {
   const f = await fs.readFile(path)
   const base64 = f.toString('base64')

@@ -78,6 +78,15 @@ export async function ready() {
   await getOpenCV()
 }
 
+/**
+ * Scan an image for a QR Code.
+ *
+ * NOTE: the detector (`cv.detectAndDecode`) runs synchronously on the JS
+ * thread and blocks the event loop for its full runtime (typically a few ms
+ * for small images, up to ~1 s for large ones). A `Promise.race` deadline
+ * cannot interrupt it — if you need hard timeouts, run `scan` in a worker
+ * thread and kill it on timeout.
+ */
 export async function scan(input: ImageSource, options: ScanOptions = {}): Promise<ScanResult> {
   validateImage(input)
   const { cv, qrcode_detector } = await getOpenCV()

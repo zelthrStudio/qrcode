@@ -249,10 +249,19 @@ export function generateKanji(shiftJisBytes: Uint8Array | number[], options: Gen
   return buildResult(encodeSegments(segs, options), '', 'kanji')
 }
 
+function validateRenderOptions(options: RenderOptions): void {
+  const { scale = 4, border = 4 } = options
+  if (!Number.isFinite(scale) || scale < 1)
+    throw new RangeError(`Invalid scale: ${scale} (must be a number >= 1)`)
+  if (!Number.isFinite(border) || border < 0)
+    throw new RangeError(`Invalid border: ${border} (must be a number >= 0)`)
+}
+
 /**
  * Render the QR Code to an SVG string.
  */
 export function toSVG(qr: QRCodeData, options: RenderOptions = {}): string {
+  validateRenderOptions(options)
   const {
     scale = 4,
     border = 4,
@@ -293,6 +302,7 @@ export function toSVG(qr: QRCodeData, options: RenderOptions = {}): string {
  * Render the QR Code to RGBA pixels.
  */
 export function toImageData(qr: QRCodeData, options: RenderOptions = {}): { data: Uint8ClampedArray; width: number; height: number } {
+  validateRenderOptions(options)
   const {
     scale = 4,
     border = 4,
@@ -400,6 +410,7 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
  * Encode the QR Code as a PNG (1-bit grayscale, stored-deflate, no deps).
  */
 export function toPNG(qr: QRCodeData, options: RenderOptions = {}): Uint8Array {
+  validateRenderOptions(options)
   const {
     scale = 4,
     border = 4,
@@ -684,6 +695,8 @@ function inflate(zlib: Uint8Array): Uint8Array {
           const length = LENGTH_BASE[index] + reader.readBits(LENGTH_EXTRA[index])
           const distSymbol = readSymbol(reader, distTable)
           const distance = DIST_BASE[distSymbol] + reader.readBits(DIST_EXTRA[distSymbol])
+          if (distance > out.length)
+            throw new Error(`Invalid deflate back-reference distance ${distance} (output length ${out.length})`)
           for (let i = 0; i < length; i++)
             out.push(out[out.length - distance])
         }
