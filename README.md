@@ -87,7 +87,7 @@ const result = await scan({
 ## Generate
 
 ```ts
-import { generate, toSVG, toDataURL } from '@zelthr/qrcode'
+import { generate, toDataURL, toSVG } from '@zelthr/qrcode'
 
 const qr = generate('https://example.com')
 // { text, version, size, ecc, mask, mode, matrix, dataCapacity }
@@ -104,27 +104,27 @@ const png = toPNG(qr) // Uint8Array, dependency-free PNG
 
 ```ts
 generate('HELLO', {
-  ecc: 'H',            // 'L' | 'M' | 'Q' | 'H', default 'M'
-  mode: 'byte',        // 'auto' | 'numeric' | 'alphanumeric' | 'byte', default 'auto'
-  version: 5,          // force version 1-40, default: smallest that fits
-  minVersion: 1,       // version range limits
+  ecc: 'H', // 'L' | 'M' | 'Q' | 'H', default 'M'
+  mode: 'byte', // 'auto' | 'numeric' | 'alphanumeric' | 'byte', default 'auto'
+  version: 5, // force version 1-40, default: smallest that fits
+  minVersion: 1, // version range limits
   maxVersion: 40,
-  mask: 3,             // force mask 0-7, or -1 for automatic, default -1
-  boostEcc: false,     // boost ECC without growing the version, default true
-  eci: 26,             // ECI designator, e.g. 26 = UTF-8
+  mask: 3, // force mask 0-7, or -1 for automatic, default -1
+  boostEcc: false, // boost ECC without growing the version, default true
+  eci: 26, // ECI designator, e.g. 26 = UTF-8
 })
 
-generateBinary(new Uint8Array([1, 2, 3]))   // raw bytes, max 2953
-generateKanji([0x82, 0xA0])                 // kanji mode from Shift_JIS bytes
+generateBinary(new Uint8Array([1, 2, 3])) // raw bytes, max 2953
+generateKanji([0x82, 0xA0]) // kanji mode from Shift_JIS bytes
 ```
 
 Rendering options (`toSVG` / `toPNG` / `toDataURL` / `toCanvas` / `toImageData`):
 
 ```ts
 toSVG(qr, {
-  scale: 4,          // modules per pixel, default 4
-  border: 4,         // quiet zone in modules, default 4
-  color: '#000000',  // dark modules
+  scale: 4, // modules per pixel, default 4
+  border: 4, // quiet zone in modules, default 4
+  color: '#000000', // dark modules
   background: '#ffffff',
 })
 ```
@@ -135,15 +135,15 @@ toSVG(qr, {
 import { check, verify, verifyGenerated } from '@zelthr/qrcode'
 
 // Validate that a payload can be encoded, and see which format is used
-const info = check('hello')  // { ok, mode, version, size, capacity }
-const tooBig = check('x'.repeat(3000))  // { ok: false, error }
+const info = check('hello') // { ok, mode, version, size, capacity }
+const tooBig = check('x'.repeat(3000)) // { ok: false, error }
 
 // Scan an image and confirm it decodes to the expected text
 const ok = await verify('https://example.com', image)
 
 // Round-trip: render a generated QR to pixels, scan it back, compare
 const qr = generate('สวัสดี')
-const verified = await verifyGenerated(qr)  // { ok, text, expected }
+const verified = await verifyGenerated(qr) // { ok, text, expected }
 ```
 
 ## PromptPay (Thai QR payment)
@@ -153,7 +153,7 @@ Generate EMVCo / Bank of Thailand PromptPay QR codes with zero dependencies
 ID / tax ID (13 digits) and e-wallet IDs (15 digits).
 
 ```ts
-import { promptPay, generatePromptPay, toSVG } from '@zelthr/qrcode'
+import { generatePromptPay, promptPay, toSVG } from '@zelthr/qrcode'
 
 // Raw EMVCo payload (ready to encode), static QR
 const payload = promptPay('081-234-5678')
@@ -172,11 +172,11 @@ Validation (ID format + amount rules):
 ```ts
 import { checkPromptPay } from '@zelthr/qrcode'
 
-checkPromptPay('0812345678')                       // { ok: true, type: 'mobile', ... }
-checkPromptPay('1111111111111')                    // { ok: true, type: 'nationalId' }
-checkPromptPay('012345678901234')                  // { ok: true, type: 'ewalletId' }
-checkPromptPay('123')                              // { ok: false, error: 'Invalid mobile number: 123' }
-checkPromptPay('0812345678', { amount: 200001 })   // { ok: false, error: 'Amount exceeds 200000 Baht limit' }
+checkPromptPay('0812345678') // { ok: true, type: 'mobile', ... }
+checkPromptPay('1111111111111') // { ok: true, type: 'nationalId' }
+checkPromptPay('012345678901234') // { ok: true, type: 'ewalletId' }
+checkPromptPay('123') // { ok: false, error: 'Invalid mobile number: 123' }
+checkPromptPay('0812345678', { amount: 200001 }) // { ok: false, error: 'Amount exceeds 200000 Baht limit' }
 checkPromptPay('0812345678', { amount: 50000, maxAmount: 10000 }) // custom limit
 ```
 
