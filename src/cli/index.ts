@@ -6,8 +6,8 @@ import readline from 'node:readline/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type QRCodeData, decodePNG, generate, toDataURL, toPNG, toSVG } from '../generate'
+import { MAX_PROMPTPAY_AMOUNT, promptPay } from '../promptpay'
 import type { ImageDataLike } from '../scan'
-import { promptPay } from '../promptpay'
 
 interface CliOptions {
   text?: string
@@ -40,7 +40,7 @@ Arguments:
 PromptPay:
   -p, --promptpay <phone>   Generate a PromptPay QR for this phone number
       --amount <baht>       Amount to request
-      --max-amount <baht>   Max amount (for non-fixed amount requests)
+      --max-amount <baht>   Max transfer limit (default: ${MAX_PROMPTPAY_AMOUNT} Baht)
 
 Output:
   -f, --format <fmt>        svg | png | data-url (default: svg)
