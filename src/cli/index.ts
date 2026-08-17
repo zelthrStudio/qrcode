@@ -5,15 +5,17 @@ import process from 'node:process'
 import readline from 'node:readline/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type QRCodeData, decodePNG, generate, toDataURL, toPNG, toSVG } from '../generate'
+import { type QRCodeData, type RenderOptions, decodePNG, generate, toDataURL, toPNG, toSVG, toTerminal } from '../generate'
 import { MAX_PROMPTPAY_AMOUNT, promptPay } from '../promptpay'
-import type { ImageDataLike } from '../scan'
+import { scan } from '../scan'
 
 interface CliOptions {
   text?: string
-  format: 'svg' | 'png' | 'data-url'
+  format?: 'svg' | 'png' | 'data-url' | 'terminal' | 'utf8'
   output?: string
   logo?: string
+  color?: string
+  background?: string
   scale?: number
   border?: number
   ecc?: 'L' | 'M' | 'Q' | 'H'
@@ -25,6 +27,7 @@ interface CliOptions {
   promptpay?: string
   amount?: number
   maxAmount?: number
+  scan?: string
   quiet: boolean
   help: boolean
   version: boolean
@@ -32,10 +35,13 @@ interface CliOptions {
 
 const USAGE = `Usage: qrcode [text] [options]
 
-Generate a QR Code and print it or save it to a file.
+Generate a QR Code and print it or save it to a file, or scan an existing QR Code image.
 
 Arguments:
   text                      Text to encode (or pipe it via stdin)
+
+Scanning:
+  -d, --scan <file>         Scan a PNG image file and print the decoded text
 
 PromptPay:
   -p, --promptpay <phone>   Generate a PromptPay QR for this phone number
@@ -43,9 +49,11 @@ PromptPay:
       --max-amount <baht>   Max transfer limit (default: ${MAX_PROMPTPAY_AMOUNT} Baht)
 
 Output:
-  -f, --format <fmt>        svg | png | data-url (default: svg)
+  -f, --format <fmt>        terminal | svg | png | data-url (default: terminal in TTY, svg if piped)
   -o, --output <file>       Write to a file instead of stdout
       --logo <file>         Embed a PNG image in the center of the QR Code
+  -c, --color <color>       Module color (hex / rgb / named, default: #000000)
+      --background <color>  Background color (hex / rgb / transparent, default: #ffffff)
 
 Options:
   -s, --scale <n>           Modules per pixel (default: 4)
@@ -63,13 +71,13 @@ Options:
 Examples:
   qrcode "https://example.com"
   qrcode "hello" -f svg -o qr.svg
-  qrcode "hello" --logo logo.png -f png -o qr.png
+  qrcode "hello" --color "#0055ff" --background transparent -f png -o qr.png
   qrcode -p 0812345678 --amount 150 -f png -o qr.png
+  qrcode --scan qr.png
   cat payload.txt | qrcode -f svg -o qr.svg`
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
-    format: 'svg',
     boostEcc: true,
     quiet: false,
     help: false,
@@ -98,8 +106,8 @@ function parseArgs(argv: string[]): CliOptions {
       case '-f':
       case '--format': {
         const v = value(arg, i)
-        if (!v || !['svg', 'png', 'data-url'].includes(v))
-          throw new Error(`Invalid format: ${v} (expected svg, png or data-url)`)
+        if (!v || !['svg', 'png', 'data-url', 'terminal', 'utf8'].includes(v))
+          throw new Error(`Invalid format: ${v} (expected terminal, svg, png or data-url)`)
         options.format = v as CliOptions['format']
         if (!arg.includes('='))
           i++
@@ -112,8 +120,28 @@ function parseArgs(argv: string[]): CliOptions {
           i++
         break
       }
+      case '-d':
+      case '--scan': {
+        options.scan = value(arg, i)
+        if (!arg.includes('='))
+          i++
+        break
+      }
       case '--logo': {
         options.logo = value(arg, i)
+        if (!arg.includes('='))
+          i++
+        break
+      }
+      case '-c':
+      case '--color': {
+        options.color = value(arg, i)
+        if (!arg.includes('='))
+          i++
+        break
+      }
+      case '--background': {
+        options.background = value(arg, i)
         if (!arg.includes('='))
           i++
         break
@@ -238,8 +266,8 @@ async function prompt(options: CliOptions): Promise<void> {
     else {
       options.text = await rl.question('Text to encode: ')
     }
-    const format = (await rl.question('Format svg / png / data-url  [svg]: ')).trim().toLowerCase()
-    if (['svg', 'png', 'data-url'].includes(format))
+    const format = (await rl.question('Format terminal / svg / png / data-url  [terminal]: ')).trim().toLowerCase()
+    if (['terminal', 'svg', 'png', 'data-url', 'utf8'].includes(format))
       options.format = format as CliOptions['format']
     const output = (await rl.question('Output file (Enter to print): ')).trim()
     if (output)
@@ -267,7 +295,26 @@ async function main(): Promise<void> {
     return
   }
 
+  if (options.scan) {
+    const fileBytes = await fs.readFile(options.scan)
+    const image = decodePNG(fileBytes)
+    const result = await scan(image)
+    if (result.text !== null) {
+      console.log(result.text)
+    }
+    else {
+      console.error('No QR code found in image')
+      process.exitCode = 1
+    }
+    return
+  }
+
   const stdinIsTTY = Boolean(process.stdin.isTTY)
+  const stdoutIsTTY = Boolean(process.stdout.isTTY)
+
+  if (!options.format)
+    options.format = (!options.output && stdoutIsTTY) ? 'terminal' : 'svg'
+
   if (!options.text && !options.promptpay && !stdinIsTTY && !options.quiet) {
     const piped = await readStdin()
     if (piped)
@@ -291,7 +338,7 @@ async function main(): Promise<void> {
     text = options.text!
   }
 
-  const { scale, border, ecc, mask, minVersion, maxVersion, boostEcc, eci } = options
+  const { scale, border, ecc, mask, minVersion, maxVersion, boostEcc, eci, color, background } = options
   const qr = generate(text, {
     ...(ecc ? { ecc } : {}),
     ...(mask !== undefined ? { mask } : {}),
@@ -300,13 +347,14 @@ async function main(): Promise<void> {
     ...(boostEcc ? {} : { boostEcc: false }),
     ...(eci !== undefined ? { eci } : {}),
   })
-  const renderOptions: { scale?: number; border?: number; logo?: ImageDataLike } = {
+  const renderOptions: RenderOptions = {
     ...(scale !== undefined ? { scale } : {}),
     ...(border !== undefined ? { border } : {}),
+    ...(color ? { color } : {}),
+    ...(background ? { background } : {}),
     ...(options.logo ? { logo: decodePNG(await fs.readFile(options.logo)) } : {}),
   }
 
-  const stdoutIsTTY = Boolean(process.stdout.isTTY)
   const content = await render(qr, options, renderOptions)
   if (options.output) {
     await fs.writeFile(options.output, content)
@@ -323,20 +371,37 @@ async function main(): Promise<void> {
   }
 }
 
-async function render(qr: QRCodeData, options: CliOptions, renderOptions: { scale?: number; border?: number; logo?: ImageDataLike }): Promise<string | Uint8Array> {
+async function render(qr: QRCodeData, options: CliOptions, renderOptions: RenderOptions): Promise<string | Uint8Array> {
   switch (options.format) {
+    case 'terminal':
+    case 'utf8':
+      return toTerminal(qr, { border: renderOptions.border ?? 2 })
     case 'svg':
       return toSVG(qr, renderOptions)
     case 'png':
       return toPNG(qr, renderOptions)
     case 'data-url':
       return toDataURL(qr, renderOptions)
+    default:
+      return toSVG(qr, renderOptions)
   }
 }
 
-main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err)
-  console.error(`qrcode: ${message}`)
-  console.error('Run \'qrcode --help\' for usage.')
-  process.exitCode = 1
-})
+const isMain = Boolean(
+  process.argv[1] && (
+    fileURLToPath(import.meta.url).replace(/\\/g, '/').toLowerCase() === process.argv[1].replace(/\\/g, '/').toLowerCase()
+    || process.argv[1].replace(/\\/g, '/').endsWith('/cli.mjs')
+    || process.argv[1].replace(/\\/g, '/').endsWith('/cli.cjs')
+    || process.argv[1].replace(/\\/g, '/').endsWith('/cli.ts')
+    || process.argv[1].replace(/\\/g, '/').endsWith('/qrcode')
+  ),
+)
+
+if (isMain) {
+  main().catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`qrcode: ${message}`)
+    console.error('Run \'qrcode --help\' for usage.')
+    process.exitCode = 1
+  })
+}

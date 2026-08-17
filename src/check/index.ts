@@ -5,39 +5,32 @@ import type { ImageSource } from '../scan'
 import { scan } from '../scan'
 
 export interface CheckResult {
-  /** Whether the payload can be encoded into a QR Code. */
   ok: boolean
-  /** Error message when `ok` is false. */
   error?: string
-  /** Mode that would be used. */
   mode?: 'numeric' | 'alphanumeric' | 'byte' | 'kanji'
-  /** Smallest version that fits (without ECC boosting). */
   version?: number
-  /** Matrix size in modules. */
   size?: number
-  /** Data capacity in codewords for the chosen version + ECC. */
   capacity?: number
-  /** Number of data bits required. */
   requiredBits?: number
 }
 
 export interface VerifyResult {
   ok: boolean
-  /** Text decoded from the image. */
   text: string | null
-  /** The text that was expected. */
   expected: string
 }
 
-function buildCheckResult(run: () => QRCodeData): CheckResult {
+function buildCheckResult(run: () => { qr: QRCodeData; segs?: QrSegment[] }): CheckResult {
   try {
-    const qr = run()
+    const { qr, segs } = run()
+    const requiredBits = segs ? QrSegment.getTotalBits(segs, qr.version) : undefined
     return {
       ok: true,
       mode: qr.mode,
       version: qr.version,
       size: qr.size,
       capacity: qr.dataCapacity,
+      ...(requiredBits !== undefined && Number.isFinite(requiredBits) ? { requiredBits } : {}),
     }
   }
   catch (e) {
@@ -48,33 +41,48 @@ function buildCheckResult(run: () => QRCodeData): CheckResult {
   }
 }
 
-/**
- * Check whether the given text can be encoded into a QR Code, and report
- * the mode / version / capacity that would be used.
- *
- * Validates all format constraints: mode encodability, character count
- * field width, version 1-40 range and data capacity.
- */
 export function check(text: string, options: GenerateOptions = {}): CheckResult {
   const { mode = 'auto' } = options
   if (mode === 'numeric' && !QrSegment.isNumeric(text))
     return { ok: false, error: 'Text contains non-numeric characters (numeric mode)' }
   if (mode === 'alphanumeric' && !QrSegment.isAlphanumeric(text))
     return { ok: false, error: 'Text contains unencodable characters (alphanumeric mode)' }
-  return buildCheckResult(() => generate(text, { ...options, boostEcc: false, mask: 0 }))
+  return buildCheckResult(() => {
+    const qr = generate(text, { ...options, boostEcc: false, mask: 0 })
+    const segs = mode === 'numeric'
+      ? [QrSegment.makeNumeric(text)]
+      : mode === 'alphanumeric'
+        ? [QrSegment.makeAlphanumeric(text)]
+        : mode === 'byte'
+          ? [QrSegment.makeBytes(QrSegment.toUtf8ByteArray(text))]
+          : QrSegment.makeSegments(text)
+    return { qr, segs }
+  })
+}
+
+export function checkSegments(segments: QrSegment[], options: GenerateOptions = {}): CheckResult {
+  return buildCheckResult(() => {
+    const qr = generate(segments, { ...options, boostEcc: false, mask: 0 })
+    return { qr, segs: segments }
+  })
 }
 
 export function checkBinary(data: Uint8Array | number[], options: GenerateOptions = {}): CheckResult {
-  return buildCheckResult(() => generateBinary(data, { ...options, boostEcc: false, mask: 0 }))
+  return buildCheckResult(() => {
+    const qr = generateBinary(data, { ...options, boostEcc: false, mask: 0 })
+    const segs = [QrSegment.makeBytes(Array.from(data))]
+    return { qr, segs }
+  })
 }
 
 export function checkKanji(shiftJisBytes: Uint8Array | number[], options: GenerateOptions = {}): CheckResult {
-  return buildCheckResult(() => generateKanji(shiftJisBytes, { ...options, boostEcc: false, mask: 0 }))
+  return buildCheckResult(() => {
+    const qr = generateKanji(shiftJisBytes, { ...options, boostEcc: false, mask: 0 })
+    const segs = [QrSegment.makeKanji(Array.from(shiftJisBytes))]
+    return { qr, segs }
+  })
 }
 
-/**
- * Scan an image and verify it decodes to the expected text.
- */
 export async function verify(text: string, image: ImageSource): Promise<VerifyResult> {
   const result = await scan(image)
   return {
@@ -84,12 +92,6 @@ export async function verify(text: string, image: ImageSource): Promise<VerifyRe
   }
 }
 
-/**
- * Round-trip check: render a generated QR Code to pixels and scan it back,
- * confirming it decodes to exactly the payload it was generated from.
- *
- * Works in browsers (canvas) and Node.js (built-in PNG encoder/decoder).
- */
 export async function verifyGenerated(qr: QRCodeData, options: RenderOptions = {}): Promise<VerifyResult> {
   const source = await qrToImageSource(qr, options)
   const result = await scan(source)

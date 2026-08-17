@@ -1,3 +1,5 @@
+dist
 src/assets/models.ts
 src/assets/wasm.js
 src/assets/opencv.js
+

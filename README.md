@@ -68,7 +68,7 @@ setInterval(scanFrame, 100)
 Pass an [`ImageData`](https://developer.mozilla.org/en-US/docs/Web/API/ImageData)-compatible object. Using [`sharp`](https://github.com/lovell/sharp):
 
 ```ts
-import { scan } from '@zelthr/qrcode'
+import { scan, scanAll } from '@zelthr/qrcode'
 import sharp from 'sharp'
 
 const image = sharp('/path/to/image.png') // or Buffer, anything sharp supports
@@ -82,22 +82,30 @@ const result = await scan({
   width: info.width,
   height: info.height,
 })
+
+// Or scan ALL QR codes in an image:
+const allResults = await scanAll({
+  data: Uint8ClampedArray.from(data),
+  width: info.width,
+  height: info.height,
+}) // ScanResult[]
 ```
 
 ## Generate
 
 ```ts
-import { generate, toDataURL, toSVG } from '@zelthr/qrcode'
+import { generate, toDataURL, toSVG, toTerminal } from '@zelthr/qrcode'
 
 const qr = generate('https://example.com')
 // { text, version, size, ecc, mask, mode, matrix, dataCapacity }
 
 const svg = toSVG(qr) // string
+const terminal = toTerminal(qr) // print directly to console / terminal!
 const dataURL = await toDataURL(qr) // data:image/png;base64,...
 
 const canvas = toCanvas(qr) // browser only
 const { data, width } = toImageData(qr) // RGBA pixels
-const png = toPNG(qr) // Uint8Array, dependency-free PNG
+const png = toPNG(qr) // Uint8Array, dependency-free PNG (supports custom colors & alpha)
 ```
 
 ### Options
@@ -121,21 +129,21 @@ generateKanji([0x82, 0xA0]) // kanji mode from Shift_JIS bytes
 Rendering options (`toSVG` / `toPNG` / `toDataURL` / `toCanvas` / `toImageData`):
 
 ```ts
-toSVG(qr, {
+toPNG(qr, {
   scale: 4, // modules per pixel, default 4
   border: 4, // quiet zone in modules, default 4
-  color: '#000000', // dark modules
-  background: '#ffffff',
+  color: '#0055ff', // dark modules (hex, rgb, rgba, named)
+  background: 'transparent', // light modules / background
 })
 ```
 
 ## Check & verify
 
 ```ts
-import { check, verify, verifyGenerated } from '@zelthr/qrcode'
+import { check, checkSegments, verify, verifyGenerated } from '@zelthr/qrcode'
 
 // Validate that a payload can be encoded, and see which format is used
-const info = check('hello') // { ok, mode, version, size, capacity }
+const info = check('hello') // { ok, mode, version, size, capacity, requiredBits }
 const tooBig = check('x'.repeat(3000)) // { ok: false, error }
 
 // Scan an image and confirm it decodes to the expected text
@@ -146,14 +154,14 @@ const qr = generate('สวัสดี')
 const verified = await verifyGenerated(qr) // { ok, text, expected }
 ```
 
-## PromptPay (Thai QR payment)
+## PromptPay & Bill Payment (Thai QR payment)
 
-Generate EMVCo / Bank of Thailand PromptPay QR codes with zero dependencies
+Generate and parse EMVCo / Bank of Thailand PromptPay and Bill Payment QR codes with zero dependencies
 (CRC-16 computed in-house). Supported PromptPay IDs: mobile numbers, national
-ID / tax ID (13 digits) and e-wallet IDs (15 digits).
+ID / tax ID (13 digits), e-wallet IDs (15 digits), and Bill Payment (Tag 30).
 
 ```ts
-import { generatePromptPay, promptPay, toSVG } from '@zelthr/qrcode'
+import { generatePromptPay, parsePromptPay, promptPay, toSVG } from '@zelthr/qrcode'
 
 // Raw EMVCo payload (ready to encode), static QR
 const payload = promptPay('081-234-5678')
@@ -165,6 +173,10 @@ const payload = promptPay('1111111111111', { amount: 99.50 })
 // Straight to a renderable QR Code
 const qr = generatePromptPay('0812345678', { amount: 100, ecc: 'H' })
 const svg = toSVG(qr)
+
+// Parse and decode a scanned PromptPay QR payload:
+const parsed = parsePromptPay(scannedText)
+// { ok: true, crcValid: true, type: 'mobile', formattedTarget: '0812345678', amount: 100, ... }
 ```
 
 Validation (ID format + amount rules):
@@ -189,16 +201,16 @@ with at most 2 decimal places. Override the limit per call with `maxAmount`.
 | --- | --- |
 | Versions | 1 – 40 (auto or forced) |
 | Error correction | L (7%), M (15%), Q (25%), H (30%) — auto-boostable |
-| Modes | numeric, alphanumeric, byte (UTF-8), kanji (JIS X 0208), ECI |
+| Modes | numeric, alphanumeric, byte (UTF-8), kanji (JIS X 0208), ECI, custom segments |
 | Masks | 0 – 7, automatic selection by penalty score |
 | Payload | text up to 7089 chars (numeric), binary up to 2953 bytes |
-| PromptPay | EMVCo Thai payment QR (mobile / national ID / tax ID / e-wallet, optional amount) |
-| Runtimes | browsers + Node.js (canvas optional, PNG built-in) |
+| PromptPay | EMVCo Thai payment QR (mobile / national ID / tax ID / e-wallet, bill payment, parsing) |
+| Runtimes | browsers + Node.js (canvas optional, PNG built-in, terminal output) |
 
 ## Dependencies
 
 Zero runtime dependencies — the encoder, PNG encoder/decoder, CRC-16 and
-PromptPay payload generator are all built-in. The scanner bundles its own
+PromptPay payload generator/parser are all built-in. The scanner bundles its own
 OpenCV WebAssembly build and WeChat QR detection models.
 
 ## License

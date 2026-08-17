@@ -10,16 +10,9 @@ export interface ScanResult {
 }
 
 export interface ScanOptions {
-  /**
-   * Include the canvas of the detected QR code.
-   *
-   * Currently only works on browsers.
-   * @default false
-   */
   includeRectCanvas?: boolean
 }
 
-/* eslint-disable new-cap */
 async function importOpenCV(): Promise<InternalObject> {
   const cv = await import('./wasm').then(r => r.cv)
   await cv.ready
@@ -36,7 +29,7 @@ interface InternalObject {
 }
 
 export interface ImageDataLike {
-  data: Uint8ClampedArray
+  data: Uint8ClampedArray | Uint8Array
   width: number
   height: number
 }
@@ -46,10 +39,11 @@ export type ImageSource =
   | ImageData
   | HTMLCanvasElement
   | HTMLImageElement
+  | HTMLVideoElement
+  | OffscreenCanvas
+  | ImageBitmap
 
-/** Max image dimension accepted by `scan` (matches the PNG decoder cap). */
 export const MAX_IMAGE_DIM = 16384
-/** Max pixel count accepted by `scan` (40 MP -> 160 MB RGBA). */
 export const MAX_IMAGE_PIXELS = 40_000_000
 
 let _promise: Promise<InternalObject> | undefined
@@ -64,29 +58,29 @@ async function getOpenCV() {
   return _promise
 }
 
-function validateImage(input: ImageSource): void {
-  const { width, height } = input
+function getImageDimensions(input: any): { width: number; height: number } {
+  if (!input || typeof input !== 'object')
+    throw new TypeError('Invalid image input')
+  const width = input.videoWidth ?? input.naturalWidth ?? input.width
+  const height = input.videoHeight ?? input.naturalHeight ?? input.height
+  return { width, height }
+}
+
+function validateImage(input: ImageSource): { width: number; height: number } {
+  const { width, height } = getImageDimensions(input)
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)
     throw new RangeError(`Invalid image dimensions: ${width}x${height}`)
   if (width > MAX_IMAGE_DIM || height > MAX_IMAGE_DIM)
     throw new RangeError(`Image dimensions ${width}x${height} exceed the ${MAX_IMAGE_DIM}px limit`)
   if (width * height > MAX_IMAGE_PIXELS)
     throw new RangeError(`Image pixel count ${width * height} exceeds the ${MAX_IMAGE_PIXELS}px limit`)
+  return { width, height }
 }
 
 export async function ready() {
   await getOpenCV()
 }
 
-/**
- * Scan an image for a QR Code.
- *
- * NOTE: the detector (`cv.detectAndDecode`) runs synchronously on the JS
- * thread and blocks the event loop for its full runtime (typically a few ms
- * for small images, up to ~1 s for large ones). A `Promise.race` deadline
- * cannot interrupt it — if you need hard timeouts, run `scan` in a worker
- * thread and kill it on timeout.
- */
 export async function scan(input: ImageSource, options: ScanOptions = {}): Promise<ScanResult> {
   validateImage(input)
   const { cv, qrcode_detector } = await getOpenCV()
@@ -134,6 +128,60 @@ export async function scan(input: ImageSource, options: ScanOptions = {}): Promi
   }
 }
 
+export async function scanAll(input: ImageSource, options: ScanOptions = {}): Promise<ScanResult[]> {
+  validateImage(input)
+  const { cv, qrcode_detector } = await getOpenCV()
+  const inputImage = cv.imread(input, cv.IMREAD_GRAYSCALE)
+  const points_vec = new cv.MatVector()
+  let res: any
+  const results: ScanResult[] = []
+  const pointMats: any[] = []
+
+  try {
+    res = qrcode_detector.detectAndDecode(inputImage, points_vec)
+    const count = res.size()
+    for (let i = 0; i < count; i++) {
+      const text = res.get(i)
+      let rect: ScanResult['rect']
+      let rectCanvas: HTMLCanvasElement | undefined
+      if (i < points_vec.size()) {
+        const pts = points_vec.get(i)
+        pointMats.push(pts)
+        if (pts) {
+          rect = {
+            x: Math.min(pts.floatAt(0), pts.floatAt(2), pts.floatAt(4), pts.floatAt(6)),
+            y: Math.min(pts.floatAt(1), pts.floatAt(3), pts.floatAt(5), pts.floatAt(7)),
+            width: Math.max(pts.floatAt(0), pts.floatAt(2), pts.floatAt(4), pts.floatAt(6))
+              - Math.min(pts.floatAt(0), pts.floatAt(2), pts.floatAt(4), pts.floatAt(6)),
+            height: Math.max(pts.floatAt(1), pts.floatAt(3), pts.floatAt(5), pts.floatAt(7))
+              - Math.min(pts.floatAt(1), pts.floatAt(3), pts.floatAt(5), pts.floatAt(7)),
+          }
+          if (options.includeRectCanvas && rect.width > 0 && rect.height > 0) {
+            if (typeof document === 'undefined')
+              throw new Error('includeRectCanvas is only available in browsers')
+            rectCanvas = document.createElement('canvas')
+            const dst = inputImage.roi(new cv.Rect(rect.x, rect.y, rect.width, rect.height))
+            cv.imshow(rectCanvas, dst)
+            dst.delete()
+          }
+        }
+      }
+      results.push({ text, rect, rectCanvas })
+    }
+    return results
+  }
+  finally {
+    for (const p of pointMats) {
+      if (p)
+        p.delete()
+    }
+    if (res)
+      res.delete()
+    points_vec.delete()
+    inputImage.delete()
+  }
+}
+
 async function loadModels(cv: any) {
   const models = await import('./wasm')
 
@@ -142,7 +190,8 @@ async function loadModels(cv: any) {
   cv.FS_createDataFile('/', 'sr.prototxt', models.sr_prototxt, true, false, false)
   cv.FS_createDataFile('/', 'sr.caffemodel', models.sr_caffemodel, true, false, false)
 
-  const qrcode_detector = new cv.wechat_qrcode_WeChatQRCode(
+  const Detector = cv.wechat_qrcode_WeChatQRCode
+  const qrcode_detector = new Detector(
     'detect.prototxt',
     'detect.caffemodel',
     'sr.prototxt',

@@ -1,35 +1,18 @@
-/*
- * QR Code generator library - ported for @zelthr/qrcode
- *
- * Algorithm and tables based on the QR Code generator library by Project Nayuki.
- * https://www.nayuki.io/page/qr-code-generator-library
- * Copyright (c) Project Nayuki. (MIT License)
- *
- * The QR Code standard is defined in ISO/IEC 18004:2015.
- * Supports QR Code Model 2: all versions (1-40), all 4 error correction levels
- * (L/M/Q/H), and all 4 character encoding modes (numeric, alphanumeric,
- * byte, kanji).
- */
-
 export const MIN_VERSION = 1
 export const MAX_VERSION = 40
 
 export const ECC_CODEWORDS_PER_BLOCK: number[][] = [
-  // Version: (note that index 0 is for padding, and is set to an illegal value)
-  // 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40    Error correction level
-  [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], // Low
-  [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28], // Medium
-  [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], // Quartile
-  [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], // High
+  [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+  [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28],
+  [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
+  [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30],
 ]
 
 export const NUM_ERROR_CORRECTION_BLOCKS: number[][] = [
-  // Version: (note that index 0 is for padding, and is set to an illegal value)
-  // 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40    Error correction level
-  [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25], // Low
-  [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49], // Medium
-  [-1, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8, 8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68], // Quartile
-  [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81], // High
+  [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25],
+  [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49],
+  [-1, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8, 8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68],
+  [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81],
 ]
 
 const PENALTY_N1 = 3
@@ -82,7 +65,6 @@ function assert(cond: boolean): void {
     throw new Error('Assertion error')
 }
 
-/** Replace unpaired surrogate code units with U+FFFD so `encodeURI` doesn't throw. */
 function sanitizeSurrogates(str: string): string {
   let out = ''
   for (let i = 0; i < str.length; i++) {
@@ -152,10 +134,6 @@ export class QrSegment {
     return new QrSegment(Mode.ALPHANUMERIC, text.length, bb)
   }
 
-  /**
-   * Kanji mode: takes a string of Shift_JIS-encoded bytes, one character
-   * (2 bytes) at a time, following the JIS X 0208 double-byte encoding.
-   */
   static makeKanji(shiftJisBytes: ReadonlyArray<number>): QrSegment {
     if (shiftJisBytes.length % 2 !== 0)
       throw new RangeError('Shift_JIS kanji bytes must be pairs of 2 bytes')
@@ -611,8 +589,13 @@ export class QrCode {
     }
 
     let dark = 0
-    for (const row of this.modules)
-      dark = row.reduce((sum, color) => sum + (color ? 1 : 0), dark)
+    for (let y = 0; y < this.size; y++) {
+      const row = this.modules[y]
+      for (let x = 0; x < this.size; x++) {
+        if (row[x])
+          dark++
+      }
+    }
     const total = this.size * this.size
     const k = Math.ceil(Math.abs(dark * 20 - total * 10) / total) - 1
     assert(k >= 0 && k <= 9)
@@ -719,7 +702,12 @@ export class QrCode {
   private finderPenaltyAddHistory(currentRunLength: number, runHistory: number[]): void {
     if (runHistory[0] === 0)
       currentRunLength += this.size
-    runHistory.pop()
-    runHistory.unshift(currentRunLength)
+    runHistory[6] = runHistory[5]
+    runHistory[5] = runHistory[4]
+    runHistory[4] = runHistory[3]
+    runHistory[3] = runHistory[2]
+    runHistory[2] = runHistory[1]
+    runHistory[1] = runHistory[0]
+    runHistory[0] = currentRunLength
   }
 }

@@ -1,45 +1,48 @@
-/*
- * PromptPay (Thai QR payment) payload generator.
- *
- * Follows the EMVCo QRCPS Merchant Presented Mode specification and the
- * Bank of Thailand PromptPay QR Code standard. Structure and normalization
- * logic based on dtinth/promptpay-qr (MIT License):
- * https://github.com/dtinth/promptpay-qr
- */
-
 import type { GenerateOptions, QRCodeData } from '../generate'
 import { generate } from '../generate'
 
 export type PromptPayType = 'mobile' | 'nationalId' | 'ewalletId'
 
 export interface PromptPayOptions {
-  /**
-   * Transfer amount in Baht. When omitted, a static (no amount) QR is
-   * generated. @default undefined
-   */
   amount?: number
-  /**
-   * Maximum transfer amount allowed (Baht). Override when the applicable
-   * PromptPay limit differs from `MAX_PROMPTPAY_AMOUNT`.
-   * @default MAX_PROMPTPAY_AMOUNT
-   */
   maxAmount?: number
+}
+
+export interface BillPaymentOptions {
+  billerId: string
+  ref1: string
+  ref2?: string
+  amount?: number
 }
 
 export interface PromptPayCheckResult {
   ok: boolean
   error?: string
-  /** Detected PromptPay ID type. */
   type?: PromptPayType
-  /** Normalized 13-digit target as it appears in the payload. */
   target?: string
-  /** The generated EMVCo payload (when `ok`). */
   payload?: string
+}
+
+export interface ParsedPromptPay {
+  ok: boolean
+  crcValid: boolean
+  error?: string
+  type?: PromptPayType | 'billPayment' | 'unknown'
+  target?: string
+  formattedTarget?: string
+  amount?: number
+  poiMethod?: 'static' | 'dynamic'
+  currency?: string
+  countryCode?: string
+  billerId?: string
+  ref1?: string
+  ref2?: string
 }
 
 const ID_PAYLOAD_FORMAT = '00'
 const ID_POI_METHOD = '01'
 const ID_MERCHANT_INFORMATION = '29'
+const ID_BILL_PAYMENT = '30'
 const ID_TRANSACTION_CURRENCY = '53'
 const ID_TRANSACTION_AMOUNT = '54'
 const ID_COUNTRY_CODE = '58'
@@ -53,10 +56,10 @@ const BOT_ID_PHONE = '01'
 const BOT_ID_TAX = '02'
 const BOT_ID_EWALLET = '03'
 const GUID_PROMPTPAY = 'A000000677010111'
+const GUID_BILL_PAYMENT = 'A000000677010112'
 const CURRENCY_THB = '764'
 const COUNTRY_CODE_TH = 'TH'
 
-/** Maximum transfer amount per transaction (Baht). Current BOT PromptPay limit. */
 export const MAX_PROMPTPAY_AMOUNT = 200000
 
 function f(id: string, value: string): string {
@@ -111,7 +114,7 @@ function formatAmount(amount: number): string {
   return amount.toFixed(2)
 }
 
-function crc16(data: string): number {
+export function crc16(data: string): number {
   let crc = 0xFFFF
   for (let i = 0; i < data.length; i++) {
     crc ^= data.charCodeAt(i) << 8
@@ -122,9 +125,6 @@ function crc16(data: string): number {
   return crc
 }
 
-/**
- * Validate a PromptPay ID / amount and report the normalized form.
- */
 export function checkPromptPay(id: string, options: PromptPayOptions = {}): PromptPayCheckResult {
   let digits: string
   let type: PromptPayType
@@ -155,16 +155,6 @@ export function checkPromptPay(id: string, options: PromptPayOptions = {}): Prom
   }
 }
 
-/**
- * Generate an EMVCo PromptPay payload string for the given PromptPay ID.
- *
- * Supports mobile numbers (e.g. `0812345678`, `+66-89-123-4567`), national
- * ID / tax ID (13 digits) and e-wallet IDs (15 digits). The returned string
- * is ready to be encoded into a QR Code (see `generatePromptPay`).
- *
- * Throws `RangeError` on invalid IDs or amounts (same rules as
- * `checkPromptPay`).
- */
 export function promptPay(id: string, options: PromptPayOptions = {}): string {
   const { amount, maxAmount = MAX_PROMPTPAY_AMOUNT } = options
   const digits = validateTarget(id)
@@ -190,16 +180,156 @@ export function promptPay(id: string, options: PromptPayOptions = {}): string {
   return `${data}${f(ID_CRC, crc)}`
 }
 
-/**
- * Generate a PromptPay QR Code, ready to render.
- *
- * ```ts
- * const qr = generatePromptPay('0812345678', { amount: 100 })
- * const svg = toSVG(qr)
- * ```
- */
+export function billPayment(options: BillPaymentOptions): string {
+  const { billerId, ref1, ref2, amount } = options
+  const sanitizedBiller = sanitize(billerId)
+  if (sanitizedBiller.length < 13 || sanitizedBiller.length > 15)
+    throw new RangeError(`Invalid Biller ID: ${billerId} (must be 13 to 15 digits)`)
+  if (!ref1 || ref1.length > 20)
+    throw new RangeError('Invalid Reference 1 (must be 1-20 alphanumeric characters)')
+  if (ref2 && ref2.length > 20)
+    throw new RangeError('Invalid Reference 2 (must be at most 20 alphanumeric characters)')
+
+  const validatedAmount = amount !== undefined ? validateAmount(amount, 5000000) : undefined
+
+  const merchantInfo = [
+    f(TEMPLATE_ID_GUID, GUID_BILL_PAYMENT),
+    f('01', sanitizedBiller),
+    f('02', ref1),
+    ref2 ? f('03', ref2) : '',
+  ].join('')
+
+  const data = [
+    f(ID_PAYLOAD_FORMAT, PAYLOAD_FORMAT_EMV_MERCHANT_PRESENTED),
+    f(ID_POI_METHOD, validatedAmount !== undefined ? POI_METHOD_DYNAMIC : POI_METHOD_STATIC),
+    f(ID_BILL_PAYMENT, merchantInfo),
+    f(ID_COUNTRY_CODE, COUNTRY_CODE_TH),
+    f(ID_TRANSACTION_CURRENCY, CURRENCY_THB),
+    validatedAmount !== undefined ? f(ID_TRANSACTION_AMOUNT, formatAmount(validatedAmount)) : '',
+  ].join('')
+
+  const dataToCrc = `${data}${ID_CRC}04`
+  const crc = crc16(dataToCrc).toString(16).toUpperCase().padStart(4, '0')
+  return `${data}${f(ID_CRC, crc)}`
+}
+
+export function parseTLV(payload: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  let pos = 0
+  while (pos + 4 <= payload.length) {
+    const id = payload.slice(pos, pos + 2)
+    const len = Number.parseInt(payload.slice(pos + 2, pos + 4), 10)
+    if (Number.isNaN(len) || pos + 4 + len > payload.length)
+      break
+    const val = payload.slice(pos + 4, pos + 4 + len)
+    result[id] = val
+    pos += 4 + len
+  }
+  return result
+}
+
+export function parsePromptPay(payload: string): ParsedPromptPay {
+  if (typeof payload !== 'string' || payload.length < 10)
+    return { ok: false, crcValid: false, error: 'Payload too short' }
+
+  const tags = parseTLV(payload)
+  if (!tags[ID_PAYLOAD_FORMAT] || !tags[ID_CRC])
+    return { ok: false, crcValid: false, error: 'Invalid EMVCo format' }
+
+  const providedCrc = tags[ID_CRC].toUpperCase()
+  const dataToCrc = payload.slice(0, payload.length - 4)
+  const computedCrc = crc16(dataToCrc).toString(16).toUpperCase().padStart(4, '0')
+  const crcValid = providedCrc === computedCrc
+
+  const poiMethod = tags[ID_POI_METHOD] === POI_METHOD_DYNAMIC ? 'dynamic' : 'static'
+  const amount = tags[ID_TRANSACTION_AMOUNT] ? Number.parseFloat(tags[ID_TRANSACTION_AMOUNT]) : undefined
+  const currency = tags[ID_TRANSACTION_CURRENCY]
+  const countryCode = tags[ID_COUNTRY_CODE]
+
+  if (tags[ID_MERCHANT_INFORMATION]) {
+    const sub = parseTLV(tags[ID_MERCHANT_INFORMATION])
+    if (sub[BOT_ID_PHONE]) {
+      const raw = sub[BOT_ID_PHONE]
+      let phone = raw
+      if (phone.startsWith('0066'))
+        phone = `0${phone.slice(4)}`
+      return {
+        ok: true,
+        crcValid,
+        type: 'mobile',
+        target: raw,
+        formattedTarget: phone,
+        amount,
+        poiMethod,
+        currency,
+        countryCode,
+      }
+    }
+    if (sub[BOT_ID_TAX]) {
+      return {
+        ok: true,
+        crcValid,
+        type: 'nationalId',
+        target: sub[BOT_ID_TAX],
+        formattedTarget: sub[BOT_ID_TAX],
+        amount,
+        poiMethod,
+        currency,
+        countryCode,
+      }
+    }
+    if (sub[BOT_ID_EWALLET]) {
+      return {
+        ok: true,
+        crcValid,
+        type: 'ewalletId',
+        target: sub[BOT_ID_EWALLET],
+        formattedTarget: sub[BOT_ID_EWALLET],
+        amount,
+        poiMethod,
+        currency,
+        countryCode,
+      }
+    }
+  }
+
+  if (tags[ID_BILL_PAYMENT] || tags['31']) {
+    const sub = parseTLV(tags[ID_BILL_PAYMENT] || tags['31'])
+    return {
+      ok: true,
+      crcValid,
+      type: 'billPayment',
+      billerId: sub['01'],
+      ref1: sub['02'],
+      ref2: sub['03'],
+      amount,
+      poiMethod,
+      currency,
+      countryCode,
+    }
+  }
+
+  return {
+    ok: true,
+    crcValid,
+    type: 'unknown',
+    amount,
+    poiMethod,
+    currency,
+    countryCode,
+  }
+}
+
+export const decodePromptPay = parsePromptPay
+
 export function generatePromptPay(id: string, options: PromptPayOptions & GenerateOptions = {}): QRCodeData {
   const { amount, maxAmount, ...qrOptions } = options
   const payload = promptPay(id, { amount, maxAmount })
+  return generate(payload, qrOptions)
+}
+
+export function generateBillPayment(options: BillPaymentOptions & GenerateOptions): QRCodeData {
+  const { billerId, ref1, ref2, amount, ...qrOptions } = options
+  const payload = billPayment({ billerId, ref1, ref2, amount })
   return generate(payload, qrOptions)
 }

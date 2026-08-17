@@ -3,13 +3,40 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import sharp from 'sharp'
-import { check, checkBinary, checkPromptPay, crc32, decodePNG, generate, generateBinary, generatePromptPay, promptPay, scan, toDataURL, toImageData, toPNG, toSVG, verify, verifyGenerated } from '../src'
+import {
+  billPayment,
+  check,
+  checkBinary,
+  checkPromptPay,
+  checkSegments,
+  crc32,
+  decodePNG,
+  decodePromptPay,
+  generate,
+  generateBillPayment,
+  generateBinary,
+  generatePromptPay,
+  parseColor,
+  parsePromptPay,
+  promptPay,
+  scan,
+  scanAll,
+  toANSI,
+  toDataURL,
+  toImageData,
+  toPNG,
+  toSVG,
+  toTerminal,
+  toUTF8,
+  verify,
+  verifyGenerated,
+} from '../src'
 import { Ecc, Mode, QrCode, QrSegment } from '../src/generate/qrcodegen'
 
 const __filename = fileURLToPath(import.meta.url)
 const ECC_BY_LETTER = { L: Ecc.LOW, M: Ecc.MEDIUM, Q: Ecc.QUARTILE, H: Ecc.HIGH } as const
 
-async function scanQRData(data: Uint8ClampedArray, width: number, height: number) {
+async function scanQRData(data: Uint8ClampedArray | Uint8Array, width: number, height: number) {
   return scan({ data, width, height })
 }
 
@@ -73,6 +100,16 @@ describe('encoder: all modes', () => {
     const qr = generateBinary(bytes)
     expect(qr.mode).toBe('byte')
     expect(qr.version).toBe(1)
+  })
+
+  it('supports passing QrSegment array directly to generate', () => {
+    const segs = [
+      QrSegment.makeNumeric('12345'),
+      QrSegment.makeAlphanumeric('HELLO'),
+    ]
+    const qr = generate(segs)
+    expect(qr.version).toBeGreaterThanOrEqual(1)
+    expect(qr.matrix.length).toBe(qr.size * qr.size)
   })
 })
 
@@ -172,6 +209,24 @@ describe('renderers', () => {
     const png = decodePNG(Uint8Array.from(atob(url.split(',')[1]), c => c.charCodeAt(0)))
     expect(png.width).toBe((qr.size + 8) * 4)
   })
+
+  it('renders terminal half-blocks and full blocks', () => {
+    const qr = generate('term test')
+    const termSmall = toTerminal(qr)
+    expect(termSmall).toContain('█')
+    const termBig = toTerminal(qr, { small: false })
+    expect(termBig).toContain('██')
+    expect(toANSI(qr)).toBe(termSmall)
+    expect(toUTF8(qr)).toBe(termSmall)
+  })
+
+  it('renders custom color & transparent PNG', async () => {
+    const qr = generate('colored qr')
+    const png = toPNG(qr, { color: '#0055ff', background: 'transparent' })
+    const decoded = decodePNG(png)
+    expect(decoded.data.length).toBe(decoded.width * decoded.height * 4)
+    expect(decoded.data[3]).toBe(0)
+  })
 })
 
 describe('generate format shortcuts', () => {
@@ -190,6 +245,12 @@ describe('generate format shortcuts', () => {
   it('generate(text, "data-url") returns a data URL', () => {
     const url = generate('https://example.com', 'data-url')
     expect(url.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('generate(text, "terminal") returns terminal string', () => {
+    const term = generate('https://example.com', 'terminal')
+    expect(typeof term).toBe('string')
+    expect(term).toContain('█')
   })
 
   it('matches the equivalent render function output', () => {
@@ -246,6 +307,14 @@ describe('check and verify', () => {
     expect(result.ok).toBe(true)
     expect(result.mode).toBe('byte')
     expect(result.version).toBeGreaterThanOrEqual(1)
+    expect(result.requiredBits).toBeGreaterThan(0)
+  })
+
+  it('checks segments', () => {
+    const segs = [QrSegment.makeNumeric('12345'), QrSegment.makeAlphanumeric('ABC')]
+    const result = checkSegments(segs)
+    expect(result.ok).toBe(true)
+    expect(result.requiredBits).toBeGreaterThan(0)
   })
 
   it('checks oversize data fails', () => {
@@ -294,7 +363,7 @@ describe('check and verify', () => {
   }, { timeout: 30_000 })
 })
 
-describe('promptPay', () => {
+describe('promptPay & billPayment', () => {
   it('generates payload for local phone number', () => {
     expect(promptPay('0801234567')).toBe('00020101021129370016A000000677010111011300668012345675802TH530376463046197')
     expect(promptPay('080-123-4567')).toBe('00020101021129370016A000000677010111011300668012345675802TH530376463046197')
@@ -341,6 +410,34 @@ describe('promptPay', () => {
     expect(checkPromptPay('0812345678', { amount: 9999, maxAmount: 10000 }).ok).toBe(true)
   })
 
+  it('parses PromptPay payloads with parsePromptPay and decodePromptPay', () => {
+    const payload = promptPay('0812345678', { amount: 150 })
+    const parsed = parsePromptPay(payload)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.crcValid).toBe(true)
+    expect(parsed.type).toBe('mobile')
+    expect(parsed.formattedTarget).toBe('0812345678')
+    expect(parsed.amount).toBe(150)
+    expect(parsed.poiMethod).toBe('dynamic')
+    expect(decodePromptPay(payload)).toEqual(parsed)
+  })
+
+  it('supports PromptPay Bill Payment', () => {
+    const bpPayload = billPayment({ billerId: '010555800000000', ref1: 'INV12345', ref2: 'CUST001', amount: 500 })
+    expect(bpPayload).toContain('30')
+    const parsed = parsePromptPay(bpPayload)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.crcValid).toBe(true)
+    expect(parsed.type).toBe('billPayment')
+    expect(parsed.billerId).toBe('010555800000000')
+    expect(parsed.ref1).toBe('INV12345')
+    expect(parsed.ref2).toBe('CUST001')
+    expect(parsed.amount).toBe(500)
+
+    const qr = generateBillPayment({ billerId: '010555800000000', ref1: 'INV12345' })
+    expect(qr.version).toBeGreaterThanOrEqual(1)
+  })
+
   it('generates a scannable PromptPay QR code', async () => {
     const qr = generatePromptPay('0812345678', { amount: 100 })
     expect(qr.mode).toBe('alphanumeric')
@@ -359,14 +456,26 @@ describe('promptPay', () => {
     expect(payload.slice(0, 2)).toBe('00')
     expect(payload.slice(-8, -4)).toBe('6304')
     const crc = Number.parseInt(payload.slice(-4), 16)
-    let check = 0xFFFF
+    let checkCrc = 0xFFFF
     for (let i = 0; i < payload.length - 4; i++) {
-      check ^= payload.charCodeAt(i) << 8
+      checkCrc ^= payload.charCodeAt(i) << 8
       for (let j = 0; j < 8; j++)
-        check = check & 0x8000 ? (check << 1) ^ 0x1021 : check << 1
-      check &= 0xFFFF
+        checkCrc = checkCrc & 0x8000 ? (checkCrc << 1) ^ 0x1021 : checkCrc << 1
+      checkCrc &= 0xFFFF
     }
-    expect(check).toBe(crc)
+    expect(checkCrc).toBe(crc)
+  }, { timeout: 30_000 })
+})
+
+describe('scanner & scanAll', () => {
+  it('scanAll returns all detected QR codes in an image', async () => {
+    const qr = generate('scan all test')
+    const png = toPNG(qr, { scale: 4 })
+    const image = decodePNG(png)
+    const results = await scanAll(image)
+    expect(results.length).toBeGreaterThanOrEqual(1)
+    expect(results[0].text).toBe('scan all test')
+    expect(results[0].rect).toBeDefined()
   }, { timeout: 30_000 })
 })
 
@@ -375,7 +484,18 @@ describe('security & correctness fixes', () => {
     expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xCBF43926)
   })
 
-  it('toSVG rejects non-hex colors (SVG injection)', () => {
+  it('parseColor handles all valid color formats and rejects bad ones', () => {
+    expect(parseColor('#fff')).toEqual([255, 255, 255, 255])
+    expect(parseColor('#00ff00')).toEqual([0, 255, 0, 255])
+    expect(parseColor('#00ff0080')).toEqual([0, 255, 0, 128])
+    expect(parseColor('transparent')).toEqual([0, 0, 0, 0])
+    expect(parseColor('rgb(10, 20, 30)')).toEqual([10, 20, 30, 255])
+    expect(parseColor('rgba(10, 20, 30, 0.5)')).toEqual([10, 20, 30, 128])
+    expect(() => parseColor('invalid-color-123')).toThrow(/Invalid color/)
+    expect(() => parseColor('" onload="alert(1)')).toThrow(/Invalid color/)
+  })
+
+  it('toSVG rejects non-hex / non-color strings', () => {
     const qr = generate('test')
     expect(() => toSVG(qr, { color: 'red' })).toThrow(/Invalid color/)
     expect(() => toSVG(qr, { color: '" onload="alert(1)' })).toThrow(/Invalid color/)
@@ -435,6 +555,7 @@ describe('second-pass fixes', () => {
   })
 
   it('makeKanji rejects pairs overflowing the 13-bit coded value', () => {
+    expect(() => QrSegment.makeKanji([0x82, 0xA0])).not.toThrow()
     expect(() => QrSegment.makeKanji([0xEB, 0xBF])).not.toThrow()
     expect(() => QrSegment.makeKanji([0xEB, 0xC0])).toThrow(/Invalid Shift_JIS/)
   })
@@ -447,7 +568,7 @@ describe('second-pass fixes', () => {
     expect(() => decodePNG(corrupted)).toThrow(/Adler/)
   })
 
-  it('hexToRgb accepts 3-digit hex', () => {
+  it('parseColor and toSVG accept 3-digit hex', () => {
     const qr = generate('short-hex')
     expect(() => toSVG(qr, { color: '#fff' })).not.toThrow()
     expect(() => toImageData(qr, { background: '#000' })).not.toThrow()
@@ -499,7 +620,6 @@ describe('third-pass fixes (report-3)', () => {
     view.setUint32(4, 1, false)
     ihdr[8] = 8
     ihdr[9] = 2
-    // fixed-Huffman block: length symbol 257, dist symbol 29 (distance 24577 > out.length 0)
     const idat = Uint8Array.from([0x78, 0x9C, 0x03, 0x5E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01])
     const sig = Uint8Array.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
     const parts = [chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', new Uint8Array(0))]
@@ -511,5 +631,87 @@ describe('third-pass fixes (report-3)', () => {
       offset += part.length
     }
     expect(() => decodePNG(png)).toThrow(/back-reference distance/)
+  })
+
+  it('decodePNG decodes indexed color PNG with PLTE palette and tRNS alpha', () => {
+    const crcOf = (type: string, data: Uint8Array) => {
+      const buf = new Uint8Array(4 + data.length)
+      for (let i = 0; i < 4; i++)
+        buf[i] = type.charCodeAt(i)
+      buf.set(data, 4)
+      return crc32(buf)
+    }
+    const chunk = (type: string, data: Uint8Array) => {
+      const out = new Uint8Array(12 + data.length)
+      new DataView(out.buffer).setUint32(0, data.length, false)
+      for (let i = 0; i < 4; i++)
+        out[4 + i] = type.charCodeAt(i)
+      out.set(data, 8)
+      new DataView(out.buffer).setUint32(8 + data.length, crcOf(type, data), false)
+      return out
+    }
+    const ihdr = new Uint8Array(13)
+    const view = new DataView(ihdr.buffer)
+    view.setUint32(0, 2, false)
+    view.setUint32(4, 2, false)
+    ihdr[8] = 8
+    ihdr[9] = 3
+
+    const plte = Uint8Array.from([
+      255, 0, 0,
+      0, 255, 0,
+      0, 0, 255,
+      255, 255, 0,
+    ])
+    const trns = Uint8Array.from([255, 128, 0, 255])
+    const rawData = Uint8Array.from([0, 0, 1, 0, 2, 3])
+    const len = rawData.length
+    const nlen = (~len) & 0xFFFF
+    const adlerData = (() => {
+      let a = 1
+      let b = 0
+      for (let i = 0; i < rawData.length; i++) {
+        a = (a + rawData[i]) % 65521
+        b = (b + a) % 65521
+      }
+      return ((b << 16) | a) >>> 0
+    })()
+    const idat = Uint8Array.from([
+      0x78, 0x01,
+      0x01, len & 0xFF, (len >> 8) & 0xFF, nlen & 0xFF, (nlen >> 8) & 0xFF,
+      ...rawData,
+      (adlerData >>> 24) & 0xFF, (adlerData >>> 16) & 0xFF, (adlerData >>> 8) & 0xFF, adlerData & 0xFF,
+    ])
+
+    const sig = Uint8Array.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    const parts = [
+      chunk('IHDR', ihdr),
+      chunk('PLTE', plte),
+      chunk('tRNS', trns),
+      chunk('IDAT', idat),
+      chunk('IEND', new Uint8Array(0)),
+    ]
+    const png = new Uint8Array(sig.length + parts.reduce((n, c) => n + c.length, 0))
+    png.set(sig)
+    let offset = sig.length
+    for (const part of parts) {
+      png.set(part, offset)
+      offset += part.length
+    }
+    const decoded = decodePNG(png)
+    expect(decoded.width).toBe(2)
+    expect(decoded.height).toBe(2)
+    expect(decoded.data[0]).toBe(255)
+    expect(decoded.data[1]).toBe(0)
+    expect(decoded.data[2]).toBe(0)
+    expect(decoded.data[3]).toBe(255)
+    expect(decoded.data[4]).toBe(0)
+    expect(decoded.data[5]).toBe(255)
+    expect(decoded.data[6]).toBe(0)
+    expect(decoded.data[7]).toBe(128)
+    expect(decoded.data[8]).toBe(0)
+    expect(decoded.data[9]).toBe(0)
+    expect(decoded.data[10]).toBe(255)
+    expect(decoded.data[11]).toBe(0)
   })
 })
