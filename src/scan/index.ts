@@ -85,7 +85,7 @@ export async function ready() {
   await getOpenCV()
 }
 
-function rectFromPoints(points: any): ScanResult['rect'] {
+function rectFromPoints(points: any): NonNullable<ScanResult['rect']> {
   const x0 = points.floatAt(0)
   const y0 = points.floatAt(1)
   const x1 = points.floatAt(2)
