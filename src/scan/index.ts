@@ -47,10 +47,14 @@ export const MAX_IMAGE_DIM = 16384
 export const MAX_IMAGE_PIXELS = 40_000_000
 
 let _promise: Promise<InternalObject> | undefined
+let _error: Error | undefined
 
 async function getOpenCV() {
+  if (_error)
+    throw _error
   if (!_promise) {
     _promise = importOpenCV().catch((err) => {
+      _error = err
       _promise = undefined
       throw err
     })
@@ -81,26 +85,37 @@ export async function ready() {
   await getOpenCV()
 }
 
+function rectFromPoints(points: any): ScanResult['rect'] {
+  const x0 = points.floatAt(0)
+  const y0 = points.floatAt(1)
+  const x1 = points.floatAt(2)
+  const y1 = points.floatAt(3)
+  const x2 = points.floatAt(4)
+  const y2 = points.floatAt(5)
+  const x3 = points.floatAt(6)
+  const y3 = points.floatAt(7)
+  const minX = Math.min(x0, x1, x2, x3)
+  const minY = Math.min(y0, y1, y2, y3)
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(x0, x1, x2, x3) - minX,
+    height: Math.max(y0, y1, y2, y3) - minY,
+  }
+}
+
 export async function scan(input: ImageSource, options: ScanOptions = {}): Promise<ScanResult> {
   validateImage(input)
   const { cv, qrcode_detector } = await getOpenCV()
   const inputImage = cv.imread(input, cv.IMREAD_GRAYSCALE)
-  const points_vec = new cv.MatVector()
+  let points_vec: any
   let res: any
   let points: any
   try {
+    points_vec = new cv.MatVector()
     res = qrcode_detector.detectAndDecode(inputImage, points_vec)
     points = points_vec.get(0)
-    const rect = points
-      ? {
-          x: Math.min(points.floatAt(0), points.floatAt(2), points.floatAt(4), points.floatAt(6)),
-          y: Math.min(points.floatAt(1), points.floatAt(3), points.floatAt(5), points.floatAt(7)),
-          width: Math.max(points.floatAt(0), points.floatAt(2), points.floatAt(4), points.floatAt(6))
-            - Math.min(points.floatAt(0), points.floatAt(2), points.floatAt(4), points.floatAt(6)),
-          height: Math.max(points.floatAt(1), points.floatAt(3), points.floatAt(5), points.floatAt(7))
-            - Math.min(points.floatAt(1), points.floatAt(3), points.floatAt(5), points.floatAt(7)),
-        }
-      : undefined
+    const rect = points ? rectFromPoints(points) : undefined
 
     let rectCanvas: HTMLCanvasElement | undefined
     if (rect && options.includeRectCanvas && rect.width > 0 && rect.height > 0) {
@@ -123,7 +138,8 @@ export async function scan(input: ImageSource, options: ScanOptions = {}): Promi
       points.delete()
     if (res)
       res.delete()
-    points_vec.delete()
+    if (points_vec)
+      points_vec.delete()
     inputImage.delete()
   }
 }
@@ -132,12 +148,13 @@ export async function scanAll(input: ImageSource, options: ScanOptions = {}): Pr
   validateImage(input)
   const { cv, qrcode_detector } = await getOpenCV()
   const inputImage = cv.imread(input, cv.IMREAD_GRAYSCALE)
-  const points_vec = new cv.MatVector()
+  let points_vec: any
   let res: any
   const results: ScanResult[] = []
   const pointMats: any[] = []
 
   try {
+    points_vec = new cv.MatVector()
     res = qrcode_detector.detectAndDecode(inputImage, points_vec)
     const count = res.size()
     for (let i = 0; i < count; i++) {
@@ -148,14 +165,7 @@ export async function scanAll(input: ImageSource, options: ScanOptions = {}): Pr
         const pts = points_vec.get(i)
         pointMats.push(pts)
         if (pts) {
-          rect = {
-            x: Math.min(pts.floatAt(0), pts.floatAt(2), pts.floatAt(4), pts.floatAt(6)),
-            y: Math.min(pts.floatAt(1), pts.floatAt(3), pts.floatAt(5), pts.floatAt(7)),
-            width: Math.max(pts.floatAt(0), pts.floatAt(2), pts.floatAt(4), pts.floatAt(6))
-              - Math.min(pts.floatAt(0), pts.floatAt(2), pts.floatAt(4), pts.floatAt(6)),
-            height: Math.max(pts.floatAt(1), pts.floatAt(3), pts.floatAt(5), pts.floatAt(7))
-              - Math.min(pts.floatAt(1), pts.floatAt(3), pts.floatAt(5), pts.floatAt(7)),
-          }
+          rect = rectFromPoints(pts)
           if (options.includeRectCanvas && rect.width > 0 && rect.height > 0) {
             if (typeof document === 'undefined')
               throw new Error('includeRectCanvas is only available in browsers')
@@ -177,7 +187,8 @@ export async function scanAll(input: ImageSource, options: ScanOptions = {}): Pr
     }
     if (res)
       res.delete()
-    points_vec.delete()
+    if (points_vec)
+      points_vec.delete()
     inputImage.delete()
   }
 }

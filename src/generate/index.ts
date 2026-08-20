@@ -380,13 +380,20 @@ export function toImageData(qr: QRCodeData, options: RenderOptions = {}): { data
   const width = size * scale
   if (width > MAX_RENDER_DIM)
     throw new RangeError(`Rendered size ${width} exceeds the ${MAX_RENDER_DIM}px limit`)
+  // Pre-compute which QR cell each pixel row/column maps to (signed: negative = border)
+  const cellY = new Int16Array(width)
+  for (let y = 0; y < width; y++) cellY[y] = Math.floor(y / scale) - border
+  const cellX = new Int16Array(width)
+  for (let x = 0; x < width; x++) cellX[x] = Math.floor(x / scale) - border
   const data = new Uint8ClampedArray(width * width * 4)
   for (let y = 0; y < width; y++) {
+    const my = cellY[y]
+    const rowBase = my * qr.size
+    const inBoundsY = my >= 0 && my < qr.size
     for (let x = 0; x < width; x++) {
-      const mx = Math.floor(x / scale) - border
-      const my = Math.floor(y / scale) - border
-      const dark = mx >= 0 && my >= 0 && mx < qr.size && my < qr.size && qr.matrix[my * qr.size + mx] === 1
+      const mx = cellX[x]
       const i = (y * width + x) * 4
+      const dark = inBoundsY && mx >= 0 && mx < qr.size && qr.matrix[rowBase + mx] === 1
       data[i] = dark ? cr : br
       data[i + 1] = dark ? cg : bg
       data[i + 2] = dark ? cb : bb
@@ -453,21 +460,33 @@ function adler32(data: Uint8Array): number {
 }
 
 function deflateStored(data: Uint8Array): Uint8Array {
-  const out: number[] = []
+  const totalBlocks = Math.max(1, Math.ceil(data.length / 65535))
+  // 2-byte zlib header + 5-byte header per block + data + 4-byte Adler-32
+  const out = new Uint8Array(2 + totalBlocks * 5 + data.length + 4)
+  out[0] = 0x78
+  out[1] = 0x01
   let offset = 0
-  const totalBlocks = Math.ceil(data.length / 65535)
+  let pos = 2
   let index = 0
-  while (offset < data.length) {
+  do {
     const len = Math.min(65535, data.length - offset)
-    out.push(index === totalBlocks - 1 ? 0x01 : 0x00)
-    out.push(len & 0xFF, (len >> 8) & 0xFF, (~len) & 0xFF, (~len >> 8) & 0xFF)
-    for (let i = 0; i < len; i++)
-      out.push(data[offset + i])
+    out[pos] = index === totalBlocks - 1 ? 0x01 : 0x00
+    out[pos + 1] = len & 0xFF
+    out[pos + 2] = (len >> 8) & 0xFF
+    out[pos + 3] = (~len) & 0xFF
+    out[pos + 4] = (~len >> 8) & 0xFF
+    if (len > 0)
+      out.set(data.subarray(offset, offset + len), pos + 5)
     offset += len
+    pos += 5 + len
     index++
-  }
+  } while (offset < data.length)
   const adler = adler32(data)
-  return Uint8Array.from([0x78, 0x01, ...out, (adler >>> 24) & 0xFF, (adler >>> 16) & 0xFF, (adler >>> 8) & 0xFF, adler & 0xFF])
+  out[pos] = (adler >>> 24) & 0xFF
+  out[pos + 1] = (adler >>> 16) & 0xFF
+  out[pos + 2] = (adler >>> 8) & 0xFF
+  out[pos + 3] = adler & 0xFF
+  return out
 }
 
 function chunk(type: string, data: Uint8Array): Uint8Array {
@@ -487,8 +506,15 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
 }
 
 function isStandardMonochrome(color?: string, background?: string): boolean {
-  const [cr, cg, cb, ca] = parseColor(color || '#000000')
-  const [br, bg, bb, ba] = parseColor(background || '#ffffff')
+  const c = color || '#000000'
+  const b = background || '#ffffff'
+  // Quick check without full parseColor for the common case
+  if (c === '#000000' && b === '#ffffff')
+    return true
+  if (c === '#000' && b === '#fff')
+    return true
+  const [cr, cg, cb, ca] = parseColor(c)
+  const [br, bg, bb, ba] = parseColor(b)
   return cr === 0 && cg === 0 && cb === 0 && ca === 255 && br === 255 && bg === 255 && bb === 255 && ba === 255
 }
 
@@ -508,15 +534,25 @@ export function toPNG(qr: QRCodeData, options: RenderOptions = {}): Uint8Array {
   const rowBytes = Math.ceil(width / 8)
   const raw = new Uint8Array((rowBytes + 1) * width)
 
+  // Pre-compute which QR cell each pixel row/column maps to (signed: negative = border)
+  const cellY = new Int16Array(width)
+  for (let y = 0; y < width; y++) cellY[y] = Math.floor(y / scale) - border
+  const cellX = new Int16Array(width)
+  for (let x = 0; x < width; x++) cellX[x] = Math.floor(x / scale) - border
+
   for (let y = 0; y < width; y++) {
     const rowOffset = y * (rowBytes + 1)
     raw[rowOffset] = 0
+    const my = cellY[y]
+    if (my < 0 || my >= qr.size)
+      continue
+    const rowBase = my * qr.size
     for (let x = 0; x < width; x++) {
-      const mx = Math.floor(x / scale) - border
-      const my = Math.floor(y / scale) - border
-      const dark = mx >= 0 && my >= 0 && mx < qr.size && my < qr.size && qr.matrix[my * qr.size + mx] === 1
-      if (dark)
-        raw[rowOffset + 1 + Math.floor(x / 8)] |= 0x80 >> (x % 8)
+      const mx = cellX[x]
+      if (mx < 0 || mx >= qr.size)
+        continue
+      if (qr.matrix[rowBase + mx] === 1)
+        raw[rowOffset + 1 + (x >> 3)] |= 0x80 >> (x & 7)
     }
   }
 
@@ -537,16 +573,27 @@ export async function toDataURL(qr: QRCodeData, options: RenderOptions = {}): Pr
   return toDataURLSync(qr, options)
 }
 
+// Fast Uint8Array -> base64. Uses Buffer in Node, chunked btoa in browsers.
+function bytesToBase64(bytes: Uint8Array): string {
+  // eslint-disable-next-line n/prefer-global/buffer
+  if (typeof Buffer !== 'undefined')
+    // eslint-disable-next-line n/prefer-global/buffer
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')
+  // Browser path: build the binary string in chunks to avoid O(n^2) concatenation
+  const CHUNK = 0x8000
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += CHUNK)
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  return btoa(binary)
+}
+
 function toDataURLSync(qr: QRCodeData, options: RenderOptions = {}): string {
   if (typeof document !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
     const canvas = toCanvas(qr, options)
     return canvas.toDataURL('image/png')
   }
   const png = toPNG(qr, options)
-  let binary = ''
-  for (let i = 0; i < png.length; i++)
-    binary += String.fromCharCode(png[i])
-  return `data:image/png;base64,${btoa(binary)}`
+  return `data:image/png;base64,${bytesToBase64(png)}`
 }
 
 export function toCanvas(qr: QRCodeData, options: RenderOptions = {}): HTMLCanvasElement {
@@ -959,9 +1006,25 @@ class BitReader {
   }
 
   readBits(count: number): number {
+    if (count === 0)
+      return 0
     let value = 0
-    for (let i = 0; i < count; i++)
-      value |= this.readBit() << i
+    let remaining = count
+    let shift = 0
+    // Consume bits from the current byte first to avoid per-bit overhead
+    while (remaining > 0) {
+      const available = 8 - this.bit
+      const take = Math.min(available, remaining)
+      const chunk = (this.data[this.pos] >> this.bit) & ((1 << take) - 1)
+      value |= chunk << shift
+      this.bit += take
+      shift += take
+      remaining -= take
+      if (this.bit === 8) {
+        this.bit = 0
+        this.pos++
+      }
+    }
     return value
   }
 
@@ -992,10 +1055,7 @@ function encodeRGBA(image: ImageDataLike): Uint8Array {
 
 function encodeLogoDataURL(logo: ImageDataLike): string {
   const png = encodeRGBA(logo)
-  let binary = ''
-  for (let i = 0; i < png.length; i++)
-    binary += String.fromCharCode(png[i])
-  return `data:image/png;base64,${btoa(binary)}`
+  return `data:image/png;base64,${bytesToBase64(png)}`
 }
 
 function encodePNG(ihdr: Uint8Array, raw: Uint8Array): Uint8Array {
